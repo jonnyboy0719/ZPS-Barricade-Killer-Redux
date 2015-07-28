@@ -1,0 +1,31 @@
+"Phrases"
+{
+	"You"
+	{
+		"en"		"Warning: Dont break Barricades!\nUnless someones life depends on it."
+	}
+	"You_Punish"
+	{
+		"en"		"Warning: Dont break Barricades!\nUnless someones life depends on it.\nYou have been punished for doing this."
+	}
+	"All"
+	{
+		"#format"	"{1:s}"
+		"en"		"{1} broke a Barricade!"
+	}
+	"All_Punish"
+	{
+		"#format"	"{1:s}"
+		"en"		"{1} broke a Barricade and got punished!"
+	}
+	"Admin"
+	{
+		"#format"	"{1:s},{2:i}"
+		"en"		"{1} broke a Barricade! ({2}hp)"
+	}
+	"Admin_Punish"
+	{
+		"#format"	"{1:s},{2:i}"
+		"en"		"{1} broke a Barricade and got punished! ({2}hp)"
+	}
+}
