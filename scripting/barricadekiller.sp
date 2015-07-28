@@ -105,6 +105,9 @@ public Action:RoundRestart(Handle:event, const String:name[], bool:dontBroadcast
 */
 public Action:OnPlayerRunCmd(client, &buttons, &impulse, Float:vel[3], Float:angles[3], &weapon)
 {
+	if (!GetConVarBool(hEnabled))
+		return;
+
 	if ((buttons & IN_ATTACK) == IN_ATTACK) 
 	{
 		// Lets grab the weapon classname
@@ -158,9 +161,7 @@ public Action:SetBarricadeOwner(Handle:timer, any:client)
 public Action:SomethingBroke(Handle:event, const String:name[], bool:dontBroadcast)
 {	
 	if (!GetConVarBool(hEnabled))
-	{
 		return;
-	}
 
 	// The client who broke it
 	new client = GetClientOfUserId(GetEventInt(event, "userid"));
