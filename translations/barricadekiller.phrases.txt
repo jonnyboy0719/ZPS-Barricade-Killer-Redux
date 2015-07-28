@@ -21,11 +21,11 @@
 	"Admin"
 	{
 		"#format"	"{1:s},{2:i}"
-		"en"		"{1} broke a Barricade! ({2}hp)"
+		"en"		"{1} broke a Barricade! (total: {2})"
 	}
 	"Admin_Punish"
 	{
 		"#format"	"{1:s},{2:i}"
-		"en"		"{1} broke a Barricade and got punished! ({2}hp)"
+		"en"		"{1} broke a Barricade and got punished! (total: {2})"
 	}
 }
