@@ -5,6 +5,10 @@ This also includes punishment system, but its disabled by default.
 # Installation
 Simply put the folders under your `addons/sourcemod` folder
 
+# Commands
+`sm_bl -- Blacklist someone (if they plant down a cade, nobody will get punished from the blacklisted one)`   
+`sm_blacklist -- Blacklist someone (if they plant down a cade, nobody will get punished from the blacklisted one)`   
+
 # Convars
 `zps_barricadekiller_version -- Checks the version of the plugin`   
 `sm_barricadekiller_enabled <0|1> -- Turns Barricade Killer Off/On. (1/0)`   

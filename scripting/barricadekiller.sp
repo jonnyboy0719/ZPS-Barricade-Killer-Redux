@@ -1,5 +1,10 @@
 #pragma semicolon 1
-#define PLUGIN_VERSION "1.0"
+
+#define PLUGIN_VERSION "1.1"
+#define PLUGIN_NAME "ZPS Barricade Killer (Redux)"
+
+#define MAX_LINE_WIDTH 64
+
 #include <sourcemod>
 #include <sdktools>
 #include <health>
@@ -9,6 +14,7 @@
 
 /*ChangeLog
 1.0		Release
+1.1		Added Blacklist system
 */
 
 // Temp fix for server crashing if no team were found
@@ -22,7 +28,7 @@
 
 public Plugin:myinfo =
 {
-	name = "ZPS Barricade Killer (Redux)",
+	name = PLUGIN_NAME,
 	author = "JonnyBoy0719",
 	description = "Notification when a Survivor Kills a Barricade.",
 	version = PLUGIN_VERSION,
@@ -38,6 +44,10 @@ new Handle:hPunishTotal = INVALID_HANDLE;
 new Handle:hPunishOwner = INVALID_HANDLE;
 new Handle:hReset = INVALID_HANDLE;
 new Handle:hDebug = INVALID_HANDLE;
+new Handle:hLan = INVALID_HANDLE;
+
+//Blacklisted
+new bool:ClientIsBlacklisted[MAXPLAYERS+1];
 
 //Player Vars
 new cadeKillCount[MAXPLAYERS+1] = {0, ...};
@@ -55,9 +65,20 @@ public OnPluginStart()
 	hReset = CreateConVar("sm_barricadekiller_reset", "2", "When to reset Running Totals, 0=never, 1=map, 2=round.", FCVAR_PLUGIN, true, 0.0, true, 2.0);
 	hDebug = CreateConVar("sm_barricadekiller_debug", "0", "Debugging mode, 0=disabled, 1=enabled.", FCVAR_PLUGIN, true, 0.0, true, 1.0);
 	
+	//Commands
+	RegAdminCmd ("sm_blacklist", Command_BlackList, ADMFLAG_BAN);
+	RegAdminCmd ("sm_bl", Command_BlackList, ADMFLAG_BAN);
+
 	//Hooks
 	HookEvent("break_prop", SomethingBroke);
+	HookEvent("player_spawn", PlayerSpawned);
 	HookEvent("game_round_restart", RoundRestart);
+
+	// Check if LAN is enabled
+	hLan = FindConVar("sv_lan");
+	if (GetConVarInt(hLan))
+		LogMessage("ATTENTION! %s in LAN environment is based on IP address rather than Steam ID. The statistics are not reliable when they are base on IP!", PLUGIN_NAME);
+
 	
 	//Translations
 	LoadTranslations("barricadekiller.phrases");
@@ -84,6 +105,91 @@ public OnMapEnd()
 }
 
 /*
+	Action:PlayerSpawned()
+*/
+public Action:PlayerSpawned(Handle:event, const String:name[], bool:dontBroadcast)
+{
+	if (!GetConVarBool(hEnabled))
+		return;
+
+	new client = GetClientOfUserId(GetEventInt(event, "userid"));
+
+	ReadBlackList(client);
+}
+
+/*
+	Action:Command_BlackList()
+*/
+public Action:Command_BlackList( client, args )
+{
+	if (!GetConVarBool(hEnabled))
+		return Plugin_Handled;
+
+	if (args < 1)
+	{
+		ReplyToCommand(client, "[Barricade Killer] Usage: blacklist <#userid|name>");
+		return Plugin_Handled;
+	}
+
+	decl String:arg[65];
+	GetCmdArg(1, arg, sizeof(arg) );
+
+	decl String:target_name[MAX_TARGET_LENGTH];
+	decl target_list[MAXPLAYERS], target_count, bool:tn_is_ml;
+
+	if ((target_count = ProcessTargetString(
+		arg,
+		client,
+		target_list,
+		MAXPLAYERS,
+		0,
+		target_name,
+		sizeof(target_name),
+		tn_is_ml)) <= 0)
+	{
+		ReplyToTargetError(client, target_count);
+		return Plugin_Handled;
+	}
+
+	for (new i = 0; i < target_count; i++)
+	{
+		PerformBlacklist(client, target_list[i]);
+	}
+
+	return Plugin_Continue;
+}
+
+/*
+	Action:ReadBlackList()
+*/
+public Action:ReadBlackList(client)
+{
+	if (!ValidatePlayer(client))
+		return;
+
+	// Gets the SteamID for the target player
+	decl String:SteamID[MAX_LINE_WIDTH];
+	GetClientAuthString_R(client, SteamID, sizeof(SteamID));
+
+	decl String:path[PLATFORM_MAX_PATH],String:current_line[128];
+	BuildPath(Path_SM, path, PLATFORM_MAX_PATH,"configs/zps_barricadekiller_blacklist.cfg");
+
+	// Opens addons/sourcemod/configs/zps_barricadekiller_blacklist.cfg
+	new Handle:fileHandle = OpenFile(path,"r");
+
+	while(!IsEndOfFile(fileHandle) && ReadFileLine(fileHandle, current_line, sizeof(current_line)))
+	{
+		if(StrContains(current_line, SteamID, false) == 0)
+		{
+			ClientIsBlacklisted[client] = true;
+			CPrintToChat(client, "[{green}Barricade Killer{default}] {blue}You are blacklisted");
+		}
+	}
+
+	CloseHandle(fileHandle);
+}
+
+/*
 	Action:RoundRestart()
 */
 public Action:RoundRestart(Handle:event, const String:name[], bool:dontBroadcast)
@@ -106,6 +212,9 @@ public Action:RoundRestart(Handle:event, const String:name[], bool:dontBroadcast
 public Action:OnPlayerRunCmd(client, &buttons, &impulse, Float:vel[3], Float:angles[3], &weapon)
 {
 	if (!GetConVarBool(hEnabled))
+		return;
+
+	if (ClientIsBlacklisted[client])
 		return;
 
 	if ((buttons & IN_ATTACK) == IN_ATTACK) 
@@ -149,7 +258,7 @@ public Action:SetBarricadeOwner(Handle:timer, any:client)
 	{
 		// Lets set the owner
 		SetEntityOwner(ent, client);
-		CPrintToChat(client, "[{green}Barricade Killer{default}] {red}Owner ID set");
+		CPrintToChat(client, "[{green}Barricade Killer{default}] {blue}Owner ID set");
 	}
 
 	return Plugin_Stop;
@@ -176,6 +285,14 @@ public Action:SomethingBroke(Handle:event, const String:name[], bool:dontBroadca
 	{
 		new ent = GetEventInt(event, "entindex");
 
+		// If it somehow don't find the entity, lets just kill it here
+		if (ent == -1)
+			return;
+
+		// if nobody own the board, don't punish or anything
+		if (GetEntityOwner(ent) == -1)
+			return;
+
 		decl String:model[128];
 		GetEntPropString(ent, Prop_Data, "m_ModelName", model, sizeof(model));
 		
@@ -185,7 +302,7 @@ public Action:SomethingBroke(Handle:event, const String:name[], bool:dontBroadca
 			{
 				// DEBUG
 				if (GetConVarBool(hDebug))
-					CPrintToChat(client, "{green}Debug{default}: {red}Client ID: %i | Owner ID: %i", client, GetEntityOwner(ent));
+					CPrintToChat(client, "{green}Debug{default}: {blue}Client ID: %i | Owner ID: %i", client, GetEntityOwner(ent));
 				if (GetEntityOwner(ent) == client)
 					return;
 			}
@@ -215,14 +332,14 @@ public Action:SomethingBroke(Handle:event, const String:name[], bool:dontBroadca
 							DamagePlayer(client, GetConVarInt(hPunishscale)+total*GetConVarInt(hPunishmultiply)*GetConVarInt(hPunishTotal));
 							// DEBUG
 							if (GetConVarBool(hDebug))
-								CPrintToChat(i, "{green}Debug{default}: {red}%i+%i*%i*%i", GetConVarInt(hPunishscale), total, GetConVarInt(hPunishmultiply), GetConVarInt(hPunishTotal));
+								CPrintToChat(i, "{green}Debug{default}: {blue}%i+%i*%i*%i", GetConVarInt(hPunishscale), total, GetConVarInt(hPunishmultiply), GetConVarInt(hPunishTotal));
 						}
 						else
 						{
 							DamagePlayer(client, GetConVarInt(hPunishscale)+total*GetConVarInt(hPunishmultiply));
 							// DEBUG
 							if (GetConVarBool(hDebug))
-								CPrintToChat(i, "{green}Debug{default}: {red}%i+%i*%i", GetConVarInt(hPunishscale), total, GetConVarInt(hPunishmultiply));
+								CPrintToChat(i, "{green}Debug{default}: {blue}%i+%i*%i", GetConVarInt(hPunishscale), total, GetConVarInt(hPunishmultiply));
 						}
 					}
 				
@@ -312,4 +429,96 @@ ValidatePlayer(client)
 		return false;
 
 	return true;
+}
+
+/*
+	OnBlacklistExist()
+*/
+OnBlacklistExist(client)
+{
+	decl String:path[PLATFORM_MAX_PATH],String:current_line[128];
+	BuildPath(Path_SM,path,PLATFORM_MAX_PATH,"configs/zps_barricadekiller_blacklist.cfg");
+
+	// Gets the SteamID for the target player
+	decl String:SteamID[MAX_LINE_WIDTH];
+	GetClientAuthString_R(client, SteamID, sizeof(SteamID));
+
+	// Opens addons/sourcemod/configs/zps_barricadekiller_blacklist.cfg
+	new Handle:fileHandle=OpenFile(path,"r");
+
+	while(!IsEndOfFile(fileHandle) && ReadFileLine(fileHandle, current_line, sizeof(current_line)))
+	{
+		if(StrContains(current_line, SteamID, false) == 0)
+		{
+			return true;
+		}
+	}
+
+	CloseHandle(fileHandle);
+
+	return false;
+}
+
+/*
+	PerformBlacklist()
+*/
+stock PerformBlacklist(client, target)
+{
+	if (!ValidatePlayer(client) || !ValidatePlayer(target))
+		return;
+
+	// Gets the SteamID for the target player
+	decl String:SteamID[MAX_LINE_WIDTH];
+	GetClientAuthString_R(target, SteamID, sizeof(SteamID));
+
+	if (OnBlacklistExist(target))
+	{
+		// Player already exists
+		CPrintToChat(client, "[{green}Barricade Killer{default}] {blue}The SteamID {default}\"{green}%s{default}\"{blue} already exist on the blacklist!", SteamID);
+		return;
+	}
+
+	LogAction(client, target, "\"%L\" added \"%L\" to the blacklist.", client, target);
+	//---------------------------------
+	decl String:path[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, path, PLATFORM_MAX_PATH, "configs/zps_barricadekiller_blacklist.cfg");
+
+	// Opens addons/sourcemod/configs/zps_barricadekiller_blacklist.cfg
+	new Handle:fileHandle = OpenFile(path, "a");
+
+	// Writes the line
+	WriteFileLine(fileHandle, SteamID);
+
+	CloseHandle(fileHandle);
+	//---------------------------------
+
+	// Tell the admin its done
+	CPrintToChat(client, "[{green}Barricade Killer{default}] {blue}You have succefully added {default}\"{green}%s{default}\"{blue} to the blacklist", SteamID);
+
+	ClientIsBlacklisted[client] = true;
+}
+
+/*
+	GetClientRankAuthString()
+*/
+GetClientAuthString_R(client, String:auth[], maxlength)
+{
+	if (GetConVarInt(hLan))
+	{
+		GetClientAuthString(client, auth, maxlength);
+
+		if (!StrEqual(auth, "BOT", false))
+		{
+			GetClientIP(client, auth, maxlength);
+		}
+	}
+	else
+	{
+		GetClientAuthString(client, auth, maxlength);
+
+		if (StrEqual(auth, "STEAM_ID_LAN", false))
+		{
+			GetClientIP(client, auth, maxlength);
+		}
+	}
 }
