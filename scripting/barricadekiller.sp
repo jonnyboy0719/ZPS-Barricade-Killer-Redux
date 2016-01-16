@@ -1,6 +1,6 @@
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "1.1"
+#define PLUGIN_VERSION "1.2"
 #define PLUGIN_NAME "ZPS Barricade Killer (Redux)"
 
 #define MAX_LINE_WIDTH 64
@@ -15,6 +15,7 @@
 /*ChangeLog
 1.0		Release
 1.1		Added Blacklist system
+1.2		Added 'Punishment timer'
 */
 
 // Temp fix for server crashing if no team were found
@@ -32,25 +33,27 @@ public Plugin:myinfo =
 	author = "JonnyBoy0719",
 	description = "Notification when a Survivor Kills a Barricade.",
 	version = PLUGIN_VERSION,
-	url = "not_yet_available"
+	url = "http://jonnyboy0719.co.uk/"
 }
 
 //Cvars
-new Handle:hEnabled = INVALID_HANDLE;
-new Handle:hPunish = INVALID_HANDLE;
-new Handle:hPunishscale = INVALID_HANDLE;
-new Handle:hPunishmultiply = INVALID_HANDLE;
-new Handle:hPunishTotal = INVALID_HANDLE;
-new Handle:hPunishOwner = INVALID_HANDLE;
-new Handle:hReset = INVALID_HANDLE;
-new Handle:hDebug = INVALID_HANDLE;
-new Handle:hLan = INVALID_HANDLE;
+new Handle:hEnabled = INVALID_HANDLE,
+	Handle:hPunish = INVALID_HANDLE,
+	Handle:hPunishscale = INVALID_HANDLE,
+	Handle:hPunishmultiply = INVALID_HANDLE,
+	Handle:hPunishTotal = INVALID_HANDLE,
+	Handle:hPunishOwner = INVALID_HANDLE,
+	Handle:hReset = INVALID_HANDLE,
+	Handle:hDebug = INVALID_HANDLE,
+	Handle:hPTimer = INVALID_HANDLE,
+	Handle:hLan = INVALID_HANDLE;
 
 //Blacklisted
 new bool:ClientIsBlacklisted[MAXPLAYERS+1];
 
 //Player Vars
-new cadeKillCount[MAXPLAYERS+1] = {0, ...};
+new cadeKillCount[MAXPLAYERS+1] = {0, ...},
+	CadeTimer[MAXPLAYERS+1] = {0, ...};
 
 public OnPluginStart()
 {
@@ -62,6 +65,7 @@ public OnPluginStart()
 	hPunishmultiply = CreateConVar("sm_barricadekiller_punish_multiply", "2", "Set the slap damage multiplier, 1=min, 99=max.", FCVAR_PLUGIN, true, 0.0, true, 99.0);
 	hPunishTotal = CreateConVar("sm_barricadekiller_punish_total", "5", "How many times they need to break a barricade until punishment takes effect, 1=min, 15=max.", FCVAR_PLUGIN, true, 1.0, true, 15.0);
 	hPunishOwner = CreateConVar("sm_barricadekiller_punish_owner", "1", "Don't punish the owner, 0=disabled, 1=enabled.", FCVAR_PLUGIN, true, 0.0, true, 1.0);
+	hPTimer = CreateConVar("sm_barricadekiller_punish_timer", "60", "How many seconds until it won't punish the player if they break it. 0=disabled.", FCVAR_PLUGIN, true, 0.0, true, 160.0);
 	hReset = CreateConVar("sm_barricadekiller_reset", "2", "When to reset Running Totals, 0=never, 1=map, 2=round.", FCVAR_PLUGIN, true, 0.0, true, 2.0);
 	hDebug = CreateConVar("sm_barricadekiller_debug", "0", "Debugging mode, 0=disabled, 1=enabled.", FCVAR_PLUGIN, true, 0.0, true, 1.0);
 	
@@ -77,9 +81,8 @@ public OnPluginStart()
 	// Check if LAN is enabled
 	hLan = FindConVar("sv_lan");
 	if (GetConVarInt(hLan))
-		LogMessage("ATTENTION! %s in LAN environment is based on IP address rather than Steam ID. The statistics are not reliable when they are base on IP!", PLUGIN_NAME);
+		LogMessage("ATTENTION! %s in LAN environment is based on IP address rather than Steam ID.", PLUGIN_NAME);
 
-	
 	//Translations
 	LoadTranslations("barricadekiller.phrases");
 
@@ -115,6 +118,8 @@ public Action:PlayerSpawned(Handle:event, const String:name[], bool:dontBroadcas
 	new client = GetClientOfUserId(GetEventInt(event, "userid"));
 
 	ReadBlackList(client);
+	
+	CadeTimer[client] = 0;
 }
 
 /*
@@ -259,9 +264,34 @@ public Action:SetBarricadeOwner(Handle:timer, any:client)
 		// Lets set the owner
 		SetEntityOwner(ent, client);
 		CPrintToChat(client, "[{green}Barricade Killer{default}] {blue}Owner ID set");
+		// Lets set the timer
+		if (GetConVarInt(hPTimer) > 0)
+		{
+			CadeTimer[client] = 0;
+			CreateTimer(1.0, SetTimer, client, TIMER_REPEAT);
+		}
 	}
 
 	return Plugin_Stop;
+}
+
+/*
+	Action:SetTimer()
+*/
+public Action:SetTimer(Handle:timer, any:client)
+{
+	if (!ValidatePlayer(client))
+		return Plugin_Stop;
+	
+	if (CadeTimer[client] < GetConVarInt(hPTimer))
+		CadeTimer[client]++;
+	else
+	{
+		CadeTimer[client] = 0;
+		return Plugin_Stop;
+	}
+	
+	return Plugin_Handled;
 }
 
 /*
@@ -312,9 +342,10 @@ public Action:SomethingBroke(Handle:event, const String:name[], bool:dontBroadca
 			new String:killerName[MAX_NAME_LENGTH];
 			GetClientName(client, killerName, sizeof(killerName));
 			
-			new total = cadeKillCount[client];
-			new total_goal = GetConVarInt(hPunishTotal);
-			new flags;
+			new total = cadeKillCount[client],
+				grab_cades_time = CadeTimer[client],
+				total_goal = GetConVarInt(hPunishTotal),
+				flags;
 			
 			for (new i = 1; i < MaxClients; i++)
 			{
@@ -325,6 +356,9 @@ public Action:SomethingBroke(Handle:event, const String:name[], bool:dontBroadca
 
 					if (GetConVarBool(hPunish))
 					{
+						// If timer is set, and cade timer is the same as the timer.
+						if (GetConVarInt(hPTimer) > 0 && grab_cades_time >= GetConVarInt(hPTimer))
+							return;
 						// If the total is more, or equals to the total_goal, call this
 						if (total >= total_goal)
 						{
